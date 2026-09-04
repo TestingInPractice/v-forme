@@ -1,0 +1,11 @@
+# Book sources (Попов 1988 PDF + scans) — not part of the app code
+sources/
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# OS junk
+.DS_Store
+
+# Local server / temp
+*.log
