@@ -3,7 +3,7 @@
  * Auto-build: picks balanced exercises for target muscle/calories/time.
  * Manual: user picks exercises + reps with over-limit guard.
  */
-import { EXERCISES, getExercise, calcExerciseCalories, isRepsOverLimit } from '../../../data/exercises.js';
+import { getExercises, getExercise, calcExerciseCalories, isRepsOverLimit } from './catalog.js';
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -11,7 +11,7 @@ function uid() {
 
 /** Filter exercises by category or muscle group. */
 export function filterExercises({ category, muscleGroup } = {}) {
-  return EXERCISES.filter(e => {
+  return getExercises().filter(e => {
     if (category && e.category !== category) return false;
     if (muscleGroup && !e.muscleGroup.includes(muscleGroup)) return false;
     return true;
@@ -27,15 +27,15 @@ export function filterExercises({ category, muscleGroup } = {}) {
 export function autoBuild({ mode, muscle, calories, targetTime, bodyWeightKg = 75 }) {
   let candidates;
   if (mode === 'muscle' && muscle) {
-    candidates = EXERCISES.filter(e => e.muscleGroup.includes(muscle));
+    candidates = getExercises().filter(e => e.muscleGroup.includes(muscle));
     // if too few, supplement with general exercises
     if (candidates.length < 3) {
-      const extras = EXERCISES.filter(e => !candidates.includes(e) && e.difficulty <= 2);
+      const extras = getExercises().filter(e => !candidates.includes(e) && e.difficulty <= 2);
       candidates = [...candidates, ...shuffle(extras)];
     }
   } else {
     // calories or time mode: pick from all bodyweight exercises for variety
-    candidates = EXERCISES.filter(e => e.equipment === 'bodyweight');
+    candidates = getExercises().filter(e => e.equipment === 'bodyweight');
   }
 
   candidates = shuffle(candidates);
@@ -132,6 +132,53 @@ export function createManualWorkout(title, items, bodyWeightKg = 75) {
     estimatedCalories: Math.round(totalCal),
     estimatedDuration: Math.round(totalDur),
   };
+}
+
+/**
+ * Create a "set" (circuit) workout: exercises with reps,
+ * run in rounds with rest between exercises.
+ * mode = 'time'  → timeLimitSec (AMRAP)
+ * mode = 'rounds' → rounds count
+ */
+export function createSetWorkout(title, items, { mode = 'time', rounds = 3, timeLimitSec = 1200, restBetweenSec = 20 } = {}) {
+  const usedRest = restBetweenSec || 20;
+  const totalCal = items.reduce((sum, it) => {
+    const ex = getExercise(it.exerciseId);
+    return sum + (ex ? calcExerciseCalories(ex, it.reps, 1, 75) : 0);
+  }, 0);
+  // Estimated duration: total work time for one round × rounds-ish target
+  const oneRoundSec = items.reduce((sum, it) => {
+    const ex = getExercise(it.exerciseId);
+    return sum + (ex ? exerciseDuration(ex, it.reps) : 0) + usedRest;
+  }, 0);
+  const estSec = mode === 'rounds'
+    ? oneRoundSec * rounds
+    : Math.min(timeLimitSec, oneRoundSec * Math.max(1, Math.round(timeLimitSec / Math.max(oneRoundSec, 1))));
+
+  return {
+    id: uid(),
+    title: title || 'Набор',
+    date: new Date().toISOString(),
+    items,
+    source: 'set',
+    kind: 'set',
+    setMode: mode,
+    setRounds: rounds,
+    setTimeLimitSec: timeLimitSec,
+    estimatedCalories: Math.round(totalCal),
+    estimatedDuration: Math.round(estSec),
+  };
+}
+
+/** Sensible default reps for a newly added exercise (middle of typical range). */
+export function defaultReps(exercise) {
+  if (!exercise) return 10;
+  return Math.round((exercise.typicalReps.min + exercise.typicalReps.max) / 2);
+}
+
+/** Single-set duration in seconds (used by the set runner work phase is manual, but for estimates). */
+export function setDurationSeconds(exercise, reps) {
+  return exerciseDuration(exercise, reps);
 }
 
 /** Check over-limit for a single exercise + reps. */

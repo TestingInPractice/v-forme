@@ -2,18 +2,20 @@
  * UI module — thin SPA router + screen rendering + event wiring.
  * All Russian UI text.
  */
-import { EXERCISES, getExercise, calcExerciseCalories, isRepsOverLimit, MUSCLE_GROUPS } from '../../../data/exercises.js';
-import { filterExercises, autoBuild, createManualWorkout, checkRepsLimit } from './workout.js';
+import { init as catalogInit, getExercises, getExercise, calcExerciseCalories, getMuscleGroups, getCategories } from './catalog.js';
+import { renderAdmin } from './admin.js';
+import { autoBuild, defaultReps } from './workout.js';
 import * as runner from './runner.js';
 import * as music from './music.js';
 import * as history from './history.js';
 import * as plans from './plans.js';
 import * as settings from './settings.js';
+import * as backup from './backup.js';
 
 const app = () => document.getElementById('app');
 let _currentScreen = 'home';
 let _currentWorkout = null;   // workout being built
-let _manualItems = [];        // items for manual build
+let _setItems = [];           // items for set build: [{exerciseId, reps}]
 
 function _uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -21,6 +23,7 @@ function _uid() {
 
 /** Initialize: load settings, show home. */
 export async function init() {
+  await catalogInit();
   await settings.loadAll();
   showScreen('home');
 }
@@ -44,7 +47,9 @@ const screens = {
   settings: renderSettings,
   history: renderHistory,
   run: renderRun,
+  runSet: renderRunSet,
   plans: renderPlans,
+  admin: renderAdmin,
 };
 
 function renderHome() {
@@ -73,6 +78,10 @@ function renderHome() {
           <span class="nav-card-icon">⚙️</span>
           <span class="nav-card-label">Настройки</span>
         </button>
+        <button class="nav-card" id="nav-og">
+          <span class="nav-card-icon">🚀</span>
+          <span class="nav-card-label">Новый интерфейс</span>
+        </button>
       </div>
     </div>
   `;
@@ -81,11 +90,16 @@ function renderHome() {
   document.getElementById('nav-plans').onclick = () => showScreen('plans');
   document.getElementById('nav-music').onclick = () => showScreen('music');
   document.getElementById('nav-settings').onclick = () => showScreen('settings');
+  document.getElementById('nav-og').onclick = () => { location.hash = '#og/home'; };
 }
 
 function renderBuild() {
   _currentWorkout = null;
-  _manualItems = [];
+  _setItems = [
+    { exerciseId: 'pull_up', reps: 5 },
+    { exerciseId: 'push_up', reps: 10 },
+    { exerciseId: 'squat', reps: 15 },
+  ];
   app().innerHTML = `
     <div class="screen build-screen">
       <div class="screen-header">
@@ -94,30 +108,30 @@ function renderBuild() {
       </div>
       <div class="tabs">
         <button class="tab active" id="tab-auto">Авто</button>
-        <button class="tab" id="tab-manual">Вручную</button>
+        <button class="tab" id="tab-set">Набор</button>
       </div>
       <div id="build-content"></div>
     </div>
   `;
   document.getElementById('build-back').onclick = () => showScreen('home');
   document.getElementById('tab-auto').onclick = () => _switchBuildTab('auto');
-  document.getElementById('tab-manual').onclick = () => _switchBuildTab('manual');
+  document.getElementById('tab-set').onclick = () => _switchBuildTab('set');
   _switchBuildTab('auto');
 }
 
 function _switchBuildTab(tab) {
   document.getElementById('tab-auto').classList.toggle('active', tab === 'auto');
-  document.getElementById('tab-manual').classList.toggle('active', tab === 'manual');
+  document.getElementById('tab-set').classList.toggle('active', tab === 'set');
   const content = document.getElementById('build-content');
   if (tab === 'auto') {
     _renderAutoBuild(content);
   } else {
-    _renderManualBuild(content);
+    _renderSetBuild(content);
   }
 }
 
 function _renderAutoBuild(container) {
-  const categories = [...new Set(EXERCISES.map(e => e.category))];
+  const categories = [...new Set(getExercises().map(e => e.category))];
   container.innerHTML = `
     <div class="auto-build">
       <div class="form-group">
@@ -154,7 +168,7 @@ function _renderAutoBuild(container) {
         <div class="form-group">
           <label>Группа мышц</label>
           <select id="auto-muscle">
-            ${MUSCLE_GROUPS.map(m => `<option value="${m}">${m}</option>`).join('')}
+            ${getMuscleGroups().map(m => `<option value="${m}">${m}</option>`).join('')}
           </select>
         </div>
       `;
@@ -194,152 +208,211 @@ async function _doAutoGenerate() {
   _renderWorkoutResult();
 }
 
-function _renderManualBuild(container) {
-  const categories = [...new Set(EXERCISES.map(e => e.category))];
+function _renderSetBuild(container) {
   container.innerHTML = `
-    <div class="manual-build">
+    <div class="set-build">
       <div class="form-group">
-        <label>Категория</label>
-        <select id="manual-category">
-          <option value="">Все</option>
-          ${categories.map(c => `<option value="${c}">${c}</option>`).join('')}
-        </select>
+        <label>Название</label>
+        <input type="text" id="set-title" value="Быстрый набор" placeholder="Введите название">
       </div>
+      <div id="set-items-list"></div>
+      <button class="btn btn-secondary btn-block" id="set-add-exercise" style="margin-top:0.75rem">+ Добавить упражнение</button>
+      <div id="set-picker" class="picker-panel hidden"></div>
+      <div class="form-group" style="margin-top:1rem">
+        <label>Режим</label>
+        <div class="radio-group">
+          <label class="radio"><input type="radio" name="set-mode" value="rounds" checked> По кругам</label>
+          <label class="radio"><input type="radio" name="set-mode" value="time"> AMRAP (время)</label>
+        </div>
+      </div>
+      <div id="set-params"></div>
       <div class="form-group">
-        <label>Упражнение</label>
-        <select id="manual-exercise"></select>
+        <label>Отдых между упражнениями (сек)</label>
+        <input type="number" id="set-rest" value="${settings._cache?.restBetweenSec || 20}" min="5" max="180" step="5">
       </div>
-      <div id="manual-exercise-info"></div>
-      <div class="form-group">
-        <label>Повторения</label>
-        <input type="number" id="manual-reps" value="10" min="1" max="100">
-      </div>
-      <div id="manual-warning" class="warning hidden"></div>
-      <button class="btn btn-primary btn-green" id="manual-add">Добавить</button>
-      <div class="form-group" style="margin-top: 1rem">
-        <label>Название тренировки</label>
-        <input type="text" id="manual-title" value="Тренировка" placeholder="Введите название">
-      </div>
-      <div id="manual-items-list"></div>
-      <div id="manual-result"></div>
+      <div id="set-summary"></div>
     </div>
   `;
 
-  const catSelect = document.getElementById('manual-category');
-  const exSelect = document.getElementById('manual-exercise');
-  const repsInput = document.getElementById('manual-reps');
-  const warningDiv = document.getElementById('manual-warning');
-  const infoDiv = document.getElementById('manual-exercise-info');
-
-  function _updateExerciseList() {
-    const cat = catSelect.value;
-    const filtered = filterExercises(cat ? { category: cat } : {});
-    exSelect.innerHTML = filtered.map(e =>
-      `<option value="${e.id}">${e.name} (${e.category})</option>`
-    ).join('');
-    _updateExerciseInfo();
-  }
-
-  function _updateExerciseInfo() {
-    const ex = getExercise(exSelect.value);
-    if (!ex) { infoDiv.innerHTML = ''; return; }
-    infoDiv.innerHTML = `
-      <div class="exercise-info-card">
-        <strong>${ex.name}</strong>
-        <p>${ex.description}</p>
-        <span class="badge">${ex.category}</span>
-        <span class="badge">${ex.muscleGroup.join(', ')}</span>
-        <span class="muted">Повторения: ${ex.typicalReps.min}–${ex.typicalReps.max}</span>
-      </div>
-    `;
-    _checkWarning();
-  }
-
-  function _checkWarning() {
-    const ex = getExercise(exSelect.value);
-    const reps = parseInt(repsInput.value, 10);
-    if (ex && reps && isRepsOverLimit(ex, reps)) {
-      warningDiv.textContent = `⚠️ Повторения выше нормы! Максимум: ${ex.typicalReps.max}`;
-      warningDiv.classList.remove('hidden');
-    } else {
-      warningDiv.classList.add('hidden');
-    }
-  }
-
-  catSelect.onchange = _updateExerciseList;
-  exSelect.onchange = _updateExerciseInfo;
-  repsInput.oninput = _checkWarning;
-
-  document.getElementById('manual-add').onclick = () => {
-    const ex = getExercise(exSelect.value);
-    const reps = parseInt(repsInput.value, 10);
-    if (!ex || !reps) return;
-
-    if (isRepsOverLimit(ex, reps)) {
-      warningDiv.textContent = `⛔ Нельзя добавить! Повторения выше лимита (${ex.typicalReps.max}).`;
-      warningDiv.classList.remove('hidden');
-      return;
-    }
-
-    _manualItems.push({ exerciseId: ex.id, reps, sets: 1, restAfterSec: 20 });
-    _updateManualItemsList();
-  };
-
-  _updateExerciseList();
-  _updateManualItemsList();
+  document.getElementById('set-add-exercise').onclick = () => _renderSetPicker();
+  document.querySelectorAll('input[name="set-mode"]').forEach(r => {
+    r.onchange = _updateSetParams;
+  });
+  _updateSetParams();
+  _updateSetItemsList();
 }
 
-function _updateManualItemsList() {
-  const list = document.getElementById('manual-items-list');
+function _updateSetParams() {
+  const mode = document.querySelector('input[name="set-mode"]:checked').value;
+  const paramsDiv = document.getElementById('set-params');
+  if (mode === 'rounds') {
+    paramsDiv.innerHTML = `
+      <div class="form-group">
+        <label>Кругов</label>
+        <input type="number" id="set-rounds" value="3" min="1" max="50">
+      </div>
+    `;
+  } else {
+    paramsDiv.innerHTML = `
+      <div class="form-group">
+        <label>Лимит времени (минут)</label>
+        <input type="number" id="set-time" value="20" min="1" max="120">
+      </div>
+    `;
+  }
+}
+
+function _updateSetItemsList() {
+  const list = document.getElementById('set-items-list');
   if (!list) return;
-  if (_manualItems.length === 0) {
-    list.innerHTML = '<p class="muted">Добавьте упражнения</p>';
-    const result = document.getElementById('manual-result');
-    if (result) result.innerHTML = '';
+
+  if (_setItems.length === 0) {
+    list.innerHTML = '<p class="muted">Добавьте упражнения — например, подтягивания и приседания.</p>';
+  } else {
+    list.innerHTML = `
+      <div class="set-list">
+        ${_setItems.map((it, i) => {
+          const ex = getExercise(it.exerciseId);
+          return `
+            <div class="set-card">
+              <div class="set-card-top">
+                <span class="set-card-name">${i + 1}. ${ex?.name || it.exerciseId}</span>
+                <button class="btn-icon btn-sm" data-set-del="${i}">✕</button>
+              </div>
+              <div class="set-stepper">
+                <button class="btn-stepper" data-reps-dec="${i}">−</button>
+                <span class="set-reps">${it.reps}</span>
+                <button class="btn-stepper" data-reps-inc="${i}">+</button>
+                <span class="set-reps-label">повторений</span>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+
+    list.querySelectorAll('[data-set-del]').forEach(btn => {
+      btn.onclick = () => {
+        _setItems.splice(parseInt(btn.dataset.setDel, 10), 1);
+        _updateSetItemsList();
+      };
+    });
+    list.querySelectorAll('[data-reps-dec]').forEach(btn => {
+      btn.onclick = () => {
+        const i = parseInt(btn.dataset.repsDec, 10);
+        _setItems[i].reps = Math.max(1, _setItems[i].reps - 1);
+        _updateSetItemsList();
+      };
+    });
+    list.querySelectorAll('[data-reps-inc]').forEach(btn => {
+      btn.onclick = () => {
+        const i = parseInt(btn.dataset.repsInc, 10);
+        _setItems[i].reps = Math.min(200, _setItems[i].reps + 1);
+        _updateSetItemsList();
+      };
+    });
+  }
+  _updateSetSummary();
+}
+
+function _updateSetSummary() {
+  const summary = document.getElementById('set-summary');
+  if (!summary) return;
+  const weight = getBodyWeight();
+  const totalReps = _setItems.reduce((s, it) => s + it.reps, 0);
+  const totalCal = _setItems.reduce((s, it) => {
+    const ex = getExercise(it.exerciseId);
+    return s + (ex ? calcExerciseCalories(ex, it.reps, 1, weight) : 0);
+  }, 0);
+  summary.innerHTML = `
+    <div class="set-summary-bar">
+      <span>${_setItems.length} упр. · ${totalReps} повт. за круг · ~${Math.round(totalCal)} ккал</span>
+      <button class="btn btn-primary" id="set-start">Начать тренировку</button>
+      <button class="btn btn-secondary" id="set-save">💾 Сохранить</button>
+    </div>
+  `;
+  document.getElementById('set-start').onclick = _startSetWorkout;
+  document.getElementById('set-save').onclick = _saveSetPlan;
+}
+
+function _renderSetPicker() {
+  const picker = document.getElementById('set-picker');
+  if (!picker) return;
+  if (!picker.classList.contains('hidden')) {
+    picker.classList.add('hidden');
     return;
   }
-
-  list.innerHTML = `
-    <div class="items-list">
-      ${_manualItems.map((it, i) => {
-        const ex = getExercise(it.exerciseId);
-        return `
-          <div class="item-row">
-            <span>${ex?.name || it.exerciseId}: ${it.reps} повт.</span>
-            <button class="btn-icon" data-remove="${i}">✕</button>
-          </div>
-        `;
-      }).join('')}
+  picker.classList.remove('hidden');
+  picker.innerHTML = `
+    <div class="picker-search">
+      <input type="search" id="picker-search" placeholder="Поиск упражнения..." autocomplete="off">
     </div>
+    <div class="picker-list" id="picker-list"></div>
   `;
 
-  list.querySelectorAll('[data-remove]').forEach(btn => {
-    btn.onclick = () => {
-      _manualItems.splice(parseInt(btn.dataset.remove, 10), 1);
-      _updateManualItemsList();
-    };
-  });
-
-  // Show build button and summary
-  const result = document.getElementById('manual-result');
-  const weight = getBodyWeight();
-  const totalCal = _manualItems.reduce((sum, it) => {
-    const ex = getExercise(it.exerciseId);
-    return sum + (ex ? calcExerciseCalories(ex, it.reps, it.sets, weight) : 0);
-  }, 0);
-
-  result.innerHTML = `
-    <div class="workout-summary">
-      <p>Упражнений: ${_manualItems.length} | Калории: ~${Math.round(totalCal)} ккал</p>
-      <button class="btn btn-primary" id="manual-build-go">Собрать тренировку</button>
-    </div>
-  `;
-
-  document.getElementById('manual-build-go').onclick = () => {
-    const title = document.getElementById('manual-title').value || 'Тренировка';
-    _currentWorkout = createManualWorkout(title, [..._manualItems], weight);
-    _renderWorkoutResult();
+  const fill = (query) => {
+    const q = (query || '').trim().toLowerCase();
+    const listEl = document.getElementById('picker-list');
+    const filtered = getExercises().filter(e =>
+      !q || e.name.toLowerCase().includes(q) ||
+      (e.muscleGroup || []).some(m => m.toLowerCase().includes(q)) ||
+      (e.description || '').toLowerCase().includes(q)
+    );
+    const catName = (id) => (getCategories().find(c => c.id === id) || {}).name || id;
+    listEl.innerHTML = filtered.map(e => `
+      <button class="picker-row" data-pick="${e.id}">
+        <span class="picker-name">${e.name}</span>
+        <span class="picker-meta">${catName(e.category)} · ${e.typicalReps.min}–${e.typicalReps.max} повт.</span>
+      </button>
+    `).join('');
+    listEl.querySelectorAll('[data-pick]').forEach(btn => {
+      btn.onclick = () => {
+        const ex = getExercise(btn.dataset.pick);
+        if (!ex) return;
+        _setItems.push({ exerciseId: ex.id, reps: defaultReps(ex) });
+        picker.classList.add('hidden');
+        _updateSetItemsList();
+      };
+    });
   };
+
+  document.getElementById('picker-search').oninput = (e) => fill(e.target.value);
+  fill('');
+}
+
+function _collectSetCfg() {
+  const mode = document.querySelector('input[name="set-mode"]:checked').value;
+  const rest = parseInt(document.getElementById('set-rest').value, 10) || 20;
+  const cfg = {
+    title: document.getElementById('set-title').value || 'Быстрый набор',
+    items: _setItems.map(it => ({ ...it })),
+    mode,
+    restBetweenSec: rest,
+  };
+  if (mode === 'rounds') {
+    cfg.rounds = parseInt(document.getElementById('set-rounds').value, 10) || 3;
+    cfg.timeLimitSec = 0;
+  } else {
+    cfg.timeLimitSec = (parseInt(document.getElementById('set-time').value, 10) || 20) * 60;
+    cfg.rounds = Infinity;
+  }
+  return cfg;
+}
+
+function _startSetWorkout() {
+  if (_setItems.length === 0) return;
+  runner.startSet(_collectSetCfg(), { onUpdate: _updateSetRunScreen, onFinish: _onSetFinish });
+  showScreen('runSet');
+}
+
+async function _saveSetPlan() {
+  if (_setItems.length === 0) return;
+  await plans.save({ ..._collectSetCfg(), kind: 'set', date: new Date().toISOString() });
+  const btn = document.getElementById('set-save');
+  if (btn) {
+    btn.textContent = '✓ Сохранено';
+    btn.disabled = true;
+  }
 }
 
 function _renderWorkoutResult() {
@@ -406,6 +479,7 @@ function renderRun() {
     <div class="screen run-screen">
       <div class="run-phase" id="run-phase">${_phaseLabel(state.phase)}</div>
       <div class="run-exercise" id="run-exercise">${state.exerciseName || 'Подготовка...'}</div>
+      <div class="run-gif" id="run-gif"><img id="run-gif-img" alt="" hidden></div>
       <div class="run-timer" id="run-timer">${state.remaining}</div>
       <div class="run-progress">
         <div class="progress-bar"><div class="progress-fill" id="run-progress-fill" style="width:${state.progress}%"></div></div>
@@ -444,6 +518,7 @@ function _updateRunScreen(state) {
   if (timerEl) timerEl.textContent = state.remaining;
   if (progressFill) progressFill.style.width = state.progress + '%';
   if (progressLabel) progressLabel.textContent = `${state.currentIndex + 1}/${state.totalItems}`;
+  _applyRunGif(document.getElementById('run-gif-img'), state.exerciseId);
   if (pauseBtn) {
     if (state.isPaused) {
       pauseBtn.textContent = '▶ Продолжить';
@@ -458,6 +533,116 @@ function _updateRunScreen(state) {
   }
 }
 
+function renderRunSet() {
+  app().innerHTML = `
+    <div class="screen run-screen set-run-screen">
+      <div class="run-phase" id="setrun-phase">Подготовка</div>
+      <div class="run-exercise" id="setrun-exercise"></div>
+      <div class="run-gif" id="setrun-gif"><img id="setrun-gif-img" alt="" hidden></div>
+      <div class="run-timer" id="setrun-timer"></div>
+      <div class="setrun-reps" id="setrun-reps"></div>
+      <button class="btn-run btn-done" id="setrun-done">✓ Сделано</button>
+      <div class="setrun-meta" id="setrun-meta"></div>
+      <div class="run-controls">
+        <button class="btn-run btn-pause" id="setrun-pause">⏸ Пауза</button>
+        <button class="btn-run btn-skip" id="setrun-skip">⏭ Дальше</button>
+        <button class="btn-run btn-stop" id="setrun-stop">⏹ Стоп</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('setrun-pause').onclick = () => {
+    if (runner.getSetState().isPaused) {
+      runner.resumeSet();
+    } else {
+      runner.pauseSet();
+    }
+  };
+  document.getElementById('setrun-skip').onclick = () => runner.skipSetRest();
+  document.getElementById('setrun-stop').onclick = () => runner.stopSet();
+  _updateSetRunScreen(runner.getSetState());
+}
+
+function _setPhaseLabel(phase) {
+  switch (phase) {
+    case 'working': return 'Выполняйте';
+    case 'resting': return 'Отдых';
+    case 'paused': return 'Пауза';
+    case 'finished': return 'Готово!';
+    default: return '';
+  }
+}
+
+function _fmtClock(sec) {
+  sec = Math.max(0, sec || 0);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function _updateSetRunScreen(state) {
+  const phaseEl = document.getElementById('setrun-phase');
+  const exEl = document.getElementById('setrun-exercise');
+  const timerEl = document.getElementById('setrun-timer');
+  const repsEl = document.getElementById('setrun-reps');
+  const doneBtn = document.getElementById('setrun-done');
+  const metaEl = document.getElementById('setrun-meta');
+  const pauseBtn = document.getElementById('setrun-pause');
+  const skipBtn = document.getElementById('setrun-skip');
+  if (!phaseEl) return;
+
+  phaseEl.textContent = _setPhaseLabel(state.phase);
+  if (exEl) exEl.textContent = state.exerciseName || '';
+  if (repsEl) repsEl.textContent = state.reps ? `${state.reps} повторов` : '';
+  _applyRunGif(document.getElementById('setrun-gif-img'), state.exerciseId);
+
+  const roundLabel = state.roundsTotal
+    ? `Круг ${state.round}/${state.roundsTotal}`
+    : `Круг ${state.round}`;
+  if (metaEl) {
+    metaEl.textContent = `${roundLabel} · подход ${state.index}/${state.itemsTotal} · сделано ${state.doneSets}`;
+  }
+
+  if (timerEl) {
+    if (state.phase === 'resting') {
+      timerEl.textContent = `${state.restRemaining} с`;
+      timerEl.classList.add('resting');
+    } else {
+      timerEl.classList.remove('resting');
+      timerEl.textContent = state.timeLimitSec
+        ? `⏱ ${_fmtClock(state.elapsedSec)} / ${_fmtClock(state.timeLimitSec)}`
+        : `⏱ ${_fmtClock(state.elapsedSec)}`;
+    }
+  }
+
+  if (doneBtn) {
+    if (state.phase === 'working') {
+      doneBtn.textContent = '✓ Сделано';
+      doneBtn.classList.remove('btn-resting');
+      doneBtn.onclick = () => runner.completeSet();
+    } else if (state.phase === 'resting') {
+      doneBtn.textContent = '⏭ Дальше';
+      doneBtn.classList.add('btn-resting');
+      doneBtn.onclick = () => runner.skipSetRest();
+    } else {
+      doneBtn.onclick = null;
+    }
+  }
+
+  if (pauseBtn) pauseBtn.textContent = state.isPaused ? '▶ Продолжить' : '⏸ Пауза';
+  if (skipBtn) skipBtn.disabled = state.phase !== 'resting';
+
+  if (state.phase === 'finished') {
+    setTimeout(() => showScreen('history'), 2000);
+  }
+}
+
+async function _onSetFinish(result) {
+  if (result) {
+    await history.save(result);
+  }
+  showScreen(result ? 'history' : 'home');
+}
+
 function _phaseLabel(phase) {
   switch (phase) {
     case 'announcing': return 'Подготовка';
@@ -467,6 +652,37 @@ function _phaseLabel(phase) {
     case 'finished': return 'Готово!';
     default: return '';
   }
+}
+
+/** Показ GIF-демонстрации на run-экранах. Управляет URL.createObjectURL (revoke старого). */
+function _applyRunGif(imgEl, exerciseId) {
+  if (!imgEl) return;
+  const previous = imgEl.dataset.ex;
+  if (!exerciseId || !previous) {
+    if (previous) {
+      URL.revokeObjectURL(imgEl.src);
+      imgEl.removeAttribute('src');
+      imgEl.hidden = true;
+      delete imgEl.dataset.ex;
+    }
+    if (!exerciseId) return;
+  }
+  const ex = getExercise(exerciseId);
+  if (!ex || !ex.gifBlob) {
+    if (imgEl.src && imgEl.dataset.ex) URL.revokeObjectURL(imgEl.src);
+    imgEl.removeAttribute('src');
+    imgEl.hidden = true;
+    delete imgEl.dataset.ex;
+    return;
+  }
+  if (imgEl.dataset.ex === exerciseId) {
+    imgEl.hidden = false;
+    return;
+  }
+  if (imgEl.dataset.ex) URL.revokeObjectURL(imgEl.src);
+  imgEl.src = URL.createObjectURL(ex.gifBlob);
+  imgEl.dataset.ex = exerciseId;
+  imgEl.hidden = false;
 }
 
 async function _onWorkoutFinish(result) {
@@ -613,6 +829,19 @@ async function renderSettings() {
           <label>Вес тела (кг)</label>
           <input type="number" id="set-weight" value="${s.bodyWeight}" min="30" max="200" step="0.5">
         </div>
+        <div class="setting-row">
+          <label>Данные</label>
+          <div class="btn-row" style="margin-top:0">
+            <button class="btn btn-sm btn-secondary" id="btn-export-all">⇩ Экспортировать все данные</button>
+            <button class="btn btn-sm btn-secondary" id="btn-import-data">⇧ Импорт данных</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label>Каталог упражнений</label>
+          <div class="btn-row" style="margin-top:0">
+            <button class="btn btn-sm btn-secondary" id="btn-admin">🏋️ Управлять упражнениями</button>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -629,6 +858,10 @@ async function renderSettings() {
   ['set-voice', 'set-wakelock'].forEach(id => {
     document.getElementById(id).onchange = () => _saveSettings();
   });
+
+  document.getElementById('btn-export-all').onclick = _exportAllData;
+  document.getElementById('btn-import-data').onclick = () => _importFromFile(renderSettings);
+  document.getElementById('btn-admin').onclick = () => showScreen('admin');
 }
 
 async function _saveSettings() {
@@ -679,6 +912,7 @@ async function renderHistory() {
                   </div>
                   <div class="btn-row" style="margin-top:0.5rem">
                     <button class="btn btn-sm btn-secondary" data-replay-id="${r.id}">↻ Повторить</button>
+                    <button class="btn btn-sm btn-secondary" data-export-record="${r.id}">⇩</button>
                   </div>
                 </div>
               `).join('')}
@@ -716,6 +950,10 @@ async function renderHistory() {
       showScreen('run');
     };
   });
+
+  document.querySelectorAll('[data-export-record]').forEach(btn => {
+    btn.onclick = () => _exportItem('history', btn.dataset.exportRecord);
+  });
 }
 
 async function renderPlans() {
@@ -735,11 +973,14 @@ async function renderPlans() {
               <strong>${p.title || 'Тренировка'}</strong>
             </div>
             <div class="record-details">
-              ${(p.items?.length || 0)} упр. · ${p.estimatedCalories || 0} ккал · ${Math.round((p.estimatedDuration || 0) / 60)} мин
+              ${p.kind === 'set'
+                ? `${(p.items?.length || 0)} упр. · ${p.mode === 'rounds' ? `${p.rounds} круг.` : `${Math.round((p.timeLimitSec || 0) / 60)} мин`} · отдых ${p.restBetweenSec}с`
+                : `${(p.items?.length || 0)} упр. · ${p.estimatedCalories || 0} ккал · ${Math.round((p.estimatedDuration || 0) / 60)} мин`}
             </div>
             <div class="btn-row" style="margin-top:0.5rem">
               <button class="btn btn-sm btn-primary" data-plan-launch="${p.id}">▶ Запустить</button>
               <button class="btn btn-sm btn-secondary" data-plan-delete="${p.id}">🗑 Удалить</button>
+              <button class="btn btn-sm btn-secondary" data-export-plan="${p.id}">⇩</button>
             </div>
           </div>
         `).join('')}
@@ -754,11 +995,16 @@ async function renderPlans() {
       const id = btn.dataset.planLaunch;
       const p = allPlans.find(x => x.id === id);
       if (!p) return;
-      runner.start(
-        { ...p, id: _uid(), date: new Date().toISOString() },
-        { onUpdate: _updateRunScreen, onFinish: _onWorkoutFinish },
-      );
-      showScreen('run');
+      if (p.kind === 'set') {
+        runner.startSet({ ...p }, { onUpdate: _updateSetRunScreen, onFinish: _onSetFinish });
+        showScreen('runSet');
+      } else {
+        runner.start(
+          { ...p, id: _uid(), date: new Date().toISOString() },
+          { onUpdate: _updateRunScreen, onFinish: _onWorkoutFinish },
+        );
+        showScreen('run');
+      }
     };
   });
 
@@ -768,4 +1014,56 @@ async function renderPlans() {
       renderPlans();
     };
   });
+
+  document.querySelectorAll('[data-export-plan]').forEach(btn => {
+    btn.onclick = () => _exportItem('plan', btn.dataset.exportPlan);
+  });
+}
+
+async function _exportAllData() {
+  try {
+    const data = await backup.buildAppExport();
+    backup.downloadJson(data, backup.backupFilename('app'));
+  } catch (err) {
+    alert(err instanceof backup.BackupError ? err.message : 'Не удалось экспортировать данные');
+  }
+}
+
+async function _exportItem(type, id) {
+  try {
+    if (type === 'history') {
+      const r = await history.getById(id);
+      if (!r) return;
+      backup.downloadJson(backup.exportRecordJson('history', r), backup.backupFilename('history', r.id));
+    } else {
+      const p = await plans.getById(id);
+      if (!p) return;
+      backup.downloadJson(backup.exportRecordJson('plan', p), backup.backupFilename('plan', p.id));
+    }
+  } catch (err) {
+    alert(err instanceof backup.BackupError ? err.message : 'Не удалось экспортировать запись');
+  }
+}
+
+function _importFromFile(afterImport) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = backup.parseImport(text);
+      if (!confirm(parsed.summary)) return;
+      await backup.applyImport(parsed);
+      alert('Импорт завершён');
+      if (afterImport) afterImport();
+    } catch (err) {
+      alert(err instanceof backup.BackupError ? err.message : 'Не удалось импортировать файл');
+    } finally {
+      input.remove();
+    }
+  };
+  input.click();
 }

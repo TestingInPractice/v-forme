@@ -1,10 +1,11 @@
 /**
  * IndexedDB promise-based helper.
- * Stores: 'history' (keyPath 'id'), 'settings' (keyPath 'key'), 'plans' (keyPath 'id').
+ * Stores: 'history' (keyPath 'id'), 'settings' (keyPath 'key'), 'plans' (keyPath 'id'),
+ *         'exercises' (keyPath 'id'), 'categories' (keyPath 'id').
  */
 
 const DB_NAME = 'fitnessApp';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let _db = null;
 
@@ -22,6 +23,12 @@ function open() {
       }
       if (!db.objectStoreNames.contains('plans')) {
         db.createObjectStore('plans', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('exercises')) {
+        db.createObjectStore('exercises', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('categories')) {
+        db.createObjectStore('categories', { keyPath: 'id' });
       }
     };
     req.onsuccess = () => { _db = req.result; resolve(_db); };
@@ -55,6 +62,18 @@ export async function get(storeName, key) {
 export async function put(storeName, value) {
   const store = await _getStore(storeName, 'readwrite');
   return _promisify(store.put(value));
+}
+
+export async function putMany(storeName, items) {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    for (const item of items) store.put(item);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
 }
 
 export async function del(storeName, key) {

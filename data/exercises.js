@@ -61,6 +61,16 @@ export const EXERCISES = [
 
 export const MUSCLE_GROUPS = ['Квадрицепсы', 'Ягодицы', 'Бицепс бедра', 'Грудные', 'Дельты', 'Трицепс', 'Широчайшие', 'Бицепс', 'Кор', 'Спина', 'Плечи', 'Икры', 'Всё тело'];
 
+/** Стартовые категории каталога (сид). id совпадают с category-ключами в EXERCISES. */
+export const CATEGORIES = [
+  { id: 'legs', name: 'Ноги', order: 0 },
+  { id: 'push', name: 'Жим/Толкание', order: 1 },
+  { id: 'pull', name: 'Тяга', order: 2 },
+  { id: 'core', name: 'Кор', order: 3 },
+  { id: 'cardio', name: 'Кардио', order: 4 },
+  { id: 'stretch', name: 'Стретчинг', order: 5 },
+];
+
 export function getExercise(id) {
   return EXERCISES.find((e) => e.id === id);
 }
