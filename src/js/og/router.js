@@ -38,7 +38,24 @@ export function route() {
   const params = Object.fromEntries(qs.entries());
   const renderFn = SCREENS.get(name);
   const app = document.getElementById('app');
-  if (!renderFn || !app) return false;
+  if (!app) return false;
+
+  // Модуль экрана не загрузился (сеть/кэш) — показываем сообщение с retry,
+  // а не пустой экран.
+  if (!renderFn) {
+    app.innerHTML = `
+      <div class="og-screen og-screen-error">
+        <h3>Экран не загрузился</h3>
+        <p class="og-muted">Проверьте соединение и попробуйте ещё раз.</p>
+        <button class="og-btn" id="og-err-retry">Повторить</button>
+        <button class="og-btn og-btn-ghost" id="og-err-back">← В приложение</button>
+      </div>`;
+    const retry = document.getElementById('og-err-retry');
+    if (retry) retry.onclick = () => location.reload();
+    const back = document.getElementById('og-err-back');
+    if (back) back.onclick = () => backToApp();
+    return true;
+  }
 
   _current = name;
   _params = params;

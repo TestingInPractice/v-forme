@@ -34,7 +34,7 @@ export const CHANGE_TYPES = [
   { type: 'set_warmup', label: 'Изменить разминочный отдых', fields: [] },
   { type: 'set_inc', label: 'Изменить шаг инкремента', fields: [] },
   { type: 'set_exclude_progression', label: 'Исключить из прогрессии', fields: [] },
-  { type: 'set_routine_rest', label: 'Изменить отдых рутины', fields: [] },
+  { type: 'set_routine_rest', label: 'Изменить отдых программы', fields: [] },
 ];
 
 const COMMON_KEYS = ['type', 'rid', 'exId', 'field', 'value', 'note', 'week', 'day'];
@@ -467,7 +467,7 @@ function summarize(S, proposal) {
       case 'set_warmup': return `${name}: разминка ${item ? item.warmupRestSec : '?'}→${ch.value}`;
       case 'set_inc': return `${name}: шаг ${item ? item.inc : '?'}→${ch.value}`;
       case 'set_exclude_progression': return `прогрессия: ${ch.value ? 'выкл' : 'вкл'}`;
-      case 'set_routine_rest': return `отдых рутины: ${routine ? routine.restSec : '?'}→${ch.value}`;
+      case 'set_routine_rest': return `отдых программы: ${routine ? routine.restSec : '?'}→${ch.value}`;
       default: return ch.type;
     }
   });

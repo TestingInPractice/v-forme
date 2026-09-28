@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fitness-v8';
+const CACHE_NAME = 'fitness-v9';
 const SHELL = [
   './',
   './index.html',
@@ -51,6 +51,10 @@ const SHELL = [
   './src/js/og/coach.js',
   './src/js/og/qr.js',
   './src/js/og/scan.js',
+  './src/js/og/favorites.js',
+  './src/js/og/equipment.js',
+  './src/js/og/backup.js',
+  './src/js/og/checkin.js',
   './src/js/og/screens/_workout-core.js',
   './src/js/og/screens/home.js',
   './src/js/og/screens/workout.js',
