@@ -29,14 +29,24 @@ let _ready = null;
  * регистрируется сам при импорте), затем вызывает boot() — если hash уже
  * ведёт в контур, экран отрисуется; иначе ничего не произойдёт.
  * Идемпотентна: повторные вызовы возвращают тот же промис.
+ *
+ * Устойчивость: сбой загрузки ОДНОГО модуля не убивает весь контур.
+ * Неудачные импорты логируются, boot() вызывается всегда — роутер покажет
+ * fallback-экран с кнопкой «Повторить» для маршрута, чей модуль не загрузился.
  */
 export function initOg() {
   if (!_ready) {
     _ready = Promise
-      .all(SCREENS.map((name) => import(`./screens/${name}.js`)))
-      .then(() => boot())
-      .catch((err) => {
-        console.error('og: ошибка инициализации контура', err);
+      .allSettled(SCREENS.map((name) => import(`./screens/${name}.js`)))
+      .then((results) => {
+        const failed = results.filter((r) => r.status === 'rejected');
+        if (failed.length) {
+          console.error(
+            'og: не загрузились экраны:',
+            failed.map((f) => f.reason?.message || String(f.reason))
+          );
+        }
+        return boot();
       });
   }
   return _ready;

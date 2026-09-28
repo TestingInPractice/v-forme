@@ -200,7 +200,7 @@ export function render(appEl, params) {
     genBtn.disabled = !ready;
     let hint = '';
     if (!online) hint = t('Нет сети — генерация недоступна');
-    else if (!hasRoutines) hint = t('Сначала создайте хотя бы одну рутину');
+    else if (!hasRoutines) hint = t('Сначала создайте хотя бы одну программу');
     else if (!consentInput.checked) hint = t('Подтвердите согласие, чтобы включить генерацию');
     else if (!keyInput.value.trim() && providerSelect.value !== 'compatible') hint = t('Введите API-ключ');
     else if (!taskInput.value.trim()) hint = t('Опишите задачу');
@@ -284,7 +284,7 @@ export function render(appEl, params) {
       case 'set_warmup': text = `${name}: ${t('разминка')} ${item ? item.warmupRestSec : '?'} → ${ch.value}`; break;
       case 'set_inc': text = `${name}: ${t('шаг')} ${item ? item.inc : '?'} → ${ch.value}`; break;
       case 'set_exclude_progression': text = `${t('прогрессия')}: ${ch.value ? t('выкл') : t('вкл')}`; break;
-      case 'set_routine_rest': text = `${t('отдых рутины')}: ${routine ? routine.restSec : '?'} → ${ch.value}`; break;
+      case 'set_routine_rest': text = `${t('отдых программы')}: ${routine ? routine.restSec : '?'} → ${ch.value}`; break;
       default: text = ch.type;
     }
     return `<div class="og-coach-change ${cls}"><span class="og-coach-sign">${sign}</span><span>${esc(text)}</span></div>`;
