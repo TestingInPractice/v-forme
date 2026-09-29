@@ -142,13 +142,13 @@ export function validateProposal(proposal, S) {
     } else {
       const routine = state.routines ? state.routines.find((r) => r.id === ch.rid) : null;
       if (!routine) {
-        errors.push(prefix + `рутина не найдена: ${ch.rid}`);
+        errors.push(prefix + `программа не найдена: ${ch.rid}`);
       } else if (ITEM_LEVEL_TYPES.has(ch.type)) {
         // 4. exId обязателен и существует в целевой рутине.
         if (ch.exId == null) {
           errors.push(prefix + 'отсутствует exId');
         } else if (!(routine.items || []).some((it) => it.id === ch.exId)) {
-          errors.push(prefix + `упражнение не найдено в рутине: ${ch.exId}`);
+          errors.push(prefix + `упражнение не найдено в программе: ${ch.exId}`);
         }
       }
     }
@@ -558,12 +558,12 @@ const SYSTEM_PROMPT = `Ты — AI-коуч по силовым трениров
 - set_intensifier: изменить интенсификатор. Поля: rid, exId, value (null|drop|burst|ramp).
 - set_warmup: изменить разминочный отдых (сек). Поля: rid, exId, value.
 - set_inc: изменить шаг инкремента. Поля: rid, exId, value.
-- set_exclude_progression: исключить рутину из прогрессии. Поля: rid, value (true|false).
-- set_routine_rest: изменить отдых рутины (сек). Поля: rid, value.
+- set_exclude_progression: исключить программу из прогрессии. Поля: rid, value (true|false).
+- set_routine_rest: изменить отдых программы (сек). Поля: rid, value.
 
 Правила:
 1. Изменения веса/повторов/подходов/отдыха — не более чем на 50% от текущего значения.
-2. Используй только существующие id упражнений из данных (поле id в items рутин).
+2. Используй только существующие id упражнений из данных (поле id в items программ).
 3. Не выдумывай поля — только перечисленные выше.
 4. Не добавляй пояснений вне JSON.`;
 
